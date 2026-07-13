@@ -4,7 +4,7 @@
 
 ## 来源
 - 原始安装包：`password-book-1.2.1.jar`（作者 miaohaha，站点 https://miaohaha.cn）
-- 许可证：`Proprietary`（专有软件，保留所有权利，详见 LICENSE）
+- 许可证：**MIT**（开源，详见 [LICENSE](LICENSE)）
 
 ## 本仓库内容
 - `src/main/java/cn/miaohaha/passwordbook/`：由 jar 内 `.class` 经 CFR 反编译器还原的 Java 源码（7 个文件，约 1158 行）
@@ -17,4 +17,4 @@
 - 前端 `console/` 下的 `PasswordBook.*.js` 为 webpack 压缩构建产物，非可读源码。
 
 ## 许可证
-插件为专有软件（Proprietary）。未经作者书面授权，不得用于商业分发或再发布。本仓库提供的反编译源码仅供学习与研究参考。
+本项目以 **MIT License** 开源。任何人可自由使用、复制、修改、发布本仓库代码，只需在副本中保留上述版权声明与许可声明。原始插件 `password-book` 由 miaohaha 开发，现以 MIT 协议发布源码供社区使用。
