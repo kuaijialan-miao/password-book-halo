@@ -1,0 +1,14 @@
+# 编译产物
+*.class
+/build/
+/target/
+/dist/
+
+# IDE
+*.iml
+.idea/
+.vscode/
+
+# 系统
+.DS_Store
+Thumbs.db
