@@ -4,7 +4,7 @@ plugins {
 }
 
 group = 'cn.miaohaha'
-version = '1.4.0'
+version = '1.4.1'
 description = '加密记事本：为当前登录用户提供服务端 AES-256-GCM 加密的笔记。'
 
 repositories {

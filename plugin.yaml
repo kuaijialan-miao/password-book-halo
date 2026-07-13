@@ -5,7 +5,7 @@ metadata:
 spec:
   enabled: true
   requires: ">=2.22.5"
-  version: "1.4.0"
+  version: "1.4.1"
   author:
     name: miaohaha
     website: https://miaohaha.cn

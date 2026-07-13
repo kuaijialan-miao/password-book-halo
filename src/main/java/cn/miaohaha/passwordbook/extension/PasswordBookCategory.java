@@ -4,7 +4,6 @@
  */
 package cn.miaohaha.passwordbook.extension;
 
-import lombok.Generated;
 import run.halo.app.extension.AbstractExtension;
 import run.halo.app.extension.GVK;
 
@@ -13,16 +12,13 @@ import run.halo.app.extension.GVK;
 public class PasswordBookCategory extends AbstractExtension {
     private Spec spec;
 
-    @Generated
     public PasswordBookCategory() {
     }
 
-    @Generated
     public Spec getSpec() {
-        return this.spec;
+        return spec;
     }
 
-    @Generated
     public void setSpec(Spec spec) {
         this.spec = spec;
     }
@@ -32,36 +28,29 @@ public class PasswordBookCategory extends AbstractExtension {
         private String owner;  // 用户名，用于多用户隔离
         private Integer order; // 排序权重，越小越靠前
 
-        @Generated
         public Spec() {
         }
 
-        @Generated
         public String getName() {
-            return this.name;
+            return name;
         }
 
-        @Generated
         public void setName(String name) {
             this.name = name;
         }
 
-        @Generated
         public String getOwner() {
-            return this.owner;
+            return owner;
         }
 
-        @Generated
         public void setOwner(String owner) {
             this.owner = owner;
         }
 
-        @Generated
         public Integer getOrder() {
-            return this.order;
+            return order;
         }
 
-        @Generated
         public void setOrder(Integer order) {
             this.order = order;
         }

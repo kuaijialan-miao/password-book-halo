@@ -1,13 +1,3 @@
-/*
- * Decompiled with CFR 0.152.
- * 
- * Could not load the following classes:
- *  org.springframework.stereotype.Component
- *  run.halo.app.extension.Scheme
- *  run.halo.app.extension.SchemeManager
- *  run.halo.app.plugin.BasePlugin
- *  run.halo.app.plugin.PluginContext
- */
 package cn.miaohaha.passwordbook;
 
 import cn.miaohaha.passwordbook.extension.PasswordBookMeta;
@@ -18,9 +8,12 @@ import run.halo.app.extension.SchemeManager;
 import run.halo.app.plugin.BasePlugin;
 import run.halo.app.plugin.PluginContext;
 
+/**
+ * 加密记事本插件入口。
+ * 注册 Note / Meta 两个扩展实体的 Scheme；Category 由框架按 @GVK 自动扫描注册。
+ */
 @Component
-public class PasswordBookPlugin
-extends BasePlugin {
+public class PasswordBookPlugin extends BasePlugin {
     private final SchemeManager schemeManager;
 
     public PasswordBookPlugin(PluginContext pluginContext, SchemeManager schemeManager) {
@@ -28,22 +21,21 @@ extends BasePlugin {
         this.schemeManager = schemeManager;
     }
 
+    @Override
     public void start() {
-        this.schemeManager.register(PasswordBookNote.class);
-        this.schemeManager.register(PasswordBookMeta.class);
-        System.out.println("PasswordBook plugin started");
+        schemeManager.register(PasswordBookNote.class);
+        schemeManager.register(PasswordBookMeta.class);
     }
 
+    @Override
     public void stop() {
-        Scheme metaScheme;
-        Scheme noteScheme = this.schemeManager.get(PasswordBookNote.class);
+        Scheme noteScheme = schemeManager.get(PasswordBookNote.class);
         if (noteScheme != null) {
-            this.schemeManager.unregister(noteScheme);
+            schemeManager.unregister(noteScheme);
         }
-        if ((metaScheme = this.schemeManager.get(PasswordBookMeta.class)) != null) {
-            this.schemeManager.unregister(metaScheme);
+        Scheme metaScheme = schemeManager.get(PasswordBookMeta.class);
+        if (metaScheme != null) {
+            schemeManager.unregister(metaScheme);
         }
-        System.out.println("PasswordBook plugin stopped");
     }
 }
-

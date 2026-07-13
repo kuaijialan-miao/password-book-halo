@@ -1,9 +1,3 @@
-/*
- * Decompiled with CFR 0.152.
- * 
- * Could not load the following classes:
- *  org.springframework.stereotype.Component
- */
 package cn.miaohaha.passwordbook.service;
 
 import java.time.Duration;
@@ -13,15 +7,19 @@ import java.util.concurrent.ConcurrentHashMap;
 import javax.crypto.SecretKey;
 import org.springframework.stereotype.Component;
 
+/**
+ * 内存会话管理：每个已解锁用户持有一个 token，绑定其派生密钥与用户名。
+ * token 闲置超过 {@link #SESSION_TTL_MS}（默认 30 分钟）自动失效。
+ */
 @Component
 public class PasswordBookSession {
     public static final long SESSION_TTL_MS = Duration.ofMinutes(30L).toMillis();
-    private final Map<String, Entry> tokens = new ConcurrentHashMap<String, Entry>();
+    private final Map<String, Entry> tokens = new ConcurrentHashMap<>();
 
     public String create(SecretKey key, String user) {
         String token = UUID.randomUUID().toString().replace("-", "");
         long now = System.currentTimeMillis();
-        this.tokens.put(token, new Entry(key, user, now, now));
+        tokens.put(token, new Entry(key, user, now, now));
         return token;
     }
 
@@ -29,16 +27,16 @@ public class PasswordBookSession {
         if (token == null) {
             return null;
         }
-        Entry e = this.tokens.get(token);
+        Entry e = tokens.get(token);
         if (e == null) {
             return null;
         }
         long now = System.currentTimeMillis();
         if (e.expired(now)) {
-            this.tokens.remove(token);
+            tokens.remove(token);
             return null;
         }
-        this.tokens.put(token, e.touch());
+        tokens.put(token, e.touch());
         return e.key();
     }
 
@@ -46,12 +44,12 @@ public class PasswordBookSession {
         if (token == null) {
             return null;
         }
-        Entry e = this.tokens.get(token);
+        Entry e = tokens.get(token);
         if (e == null) {
             return null;
         }
         if (e.expired(System.currentTimeMillis())) {
-            this.tokens.remove(token);
+            tokens.remove(token);
             return null;
         }
         return e.user();
@@ -59,7 +57,7 @@ public class PasswordBookSession {
 
     public void remove(String token) {
         if (token != null) {
-            this.tokens.remove(token);
+            tokens.remove(token);
         }
     }
 
@@ -67,25 +65,24 @@ public class PasswordBookSession {
         if (user == null) {
             return;
         }
-        this.tokens.entrySet().removeIf(en -> user.equals(((Entry)en.getValue()).user()));
+        tokens.entrySet().removeIf(en -> user.equals(en.getValue().user()));
     }
 
     public void revokeAll() {
-        this.tokens.clear();
+        tokens.clear();
     }
 
     public int size() {
-        return this.tokens.size();
+        return tokens.size();
     }
 
     private record Entry(SecretKey key, String user, long createdAt, long lastAccess) {
         Entry touch() {
-            return new Entry(this.key, this.user, this.createdAt, System.currentTimeMillis());
+            return new Entry(key, user, createdAt, System.currentTimeMillis());
         }
 
         boolean expired(long now) {
-            return now - this.lastAccess > SESSION_TTL_MS;
+            return now - lastAccess > SESSION_TTL_MS;
         }
     }
 }
-
