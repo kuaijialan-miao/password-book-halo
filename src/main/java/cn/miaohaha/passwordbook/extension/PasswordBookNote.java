@@ -75,6 +75,7 @@ extends AbstractExtension {
         private String contentData;
         private String contentType;
         private String owner;
+        private String category;
         private Long createdAt;
         private Long updatedAt;
 
@@ -100,6 +101,11 @@ extends AbstractExtension {
         @Generated
         public String getOwner() {
             return this.owner;
+        }
+
+        @Generated
+        public String getCategory() {
+            return this.category;
         }
 
         @Generated
@@ -130,6 +136,11 @@ extends AbstractExtension {
         @Generated
         public void setOwner(String owner) {
             this.owner = owner;
+        }
+
+        @Generated
+        public void setCategory(String category) {
+            this.category = category;
         }
 
         @Generated

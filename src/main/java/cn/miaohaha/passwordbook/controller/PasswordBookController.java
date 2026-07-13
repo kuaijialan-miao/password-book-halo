@@ -55,6 +55,7 @@ import run.halo.app.extension.MetadataOperator;
 @RequestMapping(value={"/apis/passwordbook.halo.run/v1alpha1/passwordbook"})
 public class PasswordBookController {
     private static final int MIN_PASSWORD_LEN = 8;
+    private static final String DEFAULT_PASSWORD = "12345678";
     private final CryptoService crypto;
     private final PasswordBookStore store;
     private final PasswordBookSession session;
@@ -63,6 +64,10 @@ public class PasswordBookController {
         this.crypto = crypto;
         this.store = store;
         this.session = session;
+    }
+
+    private static Mono<ResponseEntity> wrap(ResponseEntity resp) {
+        return Mono.just(resp);
     }
 
     private SecretKey requireKey(String token) {
@@ -83,24 +88,24 @@ public class PasswordBookController {
         });
     }
 
-    private Mono<ResponseEntity<?>> unauthorized() {
-        return Mono.just((Object)ResponseEntity.status((int)401).body(Map.of("error", "\u672a\u89e3\u9501\u6216\u4f1a\u8bdd\u5df2\u8fc7\u671f")));
+    private Mono<ResponseEntity> unauthorized() {
+        return Mono.just((ResponseEntity)ResponseEntity.status((int)401).body(Map.of("error", "\u672a\u89e3\u9501\u6216\u4f1a\u8bdd\u5df2\u8fc7\u671f")));
     }
 
-    private Mono<ResponseEntity<?>> forbidden() {
-        return Mono.just((Object)ResponseEntity.status((int)403).body(Map.of("error", "\u65e0\u6743\u8bbf\u95ee\u8be5\u8bb0\u5f55")));
+    private Mono<ResponseEntity> forbidden() {
+        return Mono.just((ResponseEntity)ResponseEntity.status((int)403).body(Map.of("error", "\u65e0\u6743\u8bbf\u95ee\u8be5\u8bb0\u5f55")));
     }
 
-    private Mono<ResponseEntity<?>> badRequest(String msg) {
-        return Mono.just((Object)ResponseEntity.status((int)400).body(Map.of("error", msg)));
+    private Mono<ResponseEntity> badRequest(String msg) {
+        return Mono.just((ResponseEntity)ResponseEntity.status((int)400).body(Map.of("error", msg)));
     }
 
-    private Mono<ResponseEntity<?>> validatePassword(String pw) {
+    private Mono<ResponseEntity> validatePassword(String pw) {
         if (pw == null || pw.isEmpty()) {
-            return Mono.just((Object)ResponseEntity.status((int)400).body(Map.of("error", "\u5bc6\u7801\u4e0d\u80fd\u4e3a\u7a7a")));
+            return Mono.just((ResponseEntity)ResponseEntity.status((int)400).body(Map.of("error", "\u5bc6\u7801\u4e0d\u80fd\u4e3a\u7a7a")));
         }
         if (pw.length() < 8) {
-            return Mono.just((Object)ResponseEntity.status((int)400).body(Map.of("error", "\u5bc6\u7801\u81f3\u5c11 8 \u4f4d")));
+            return Mono.just((ResponseEntity)ResponseEntity.status((int)400).body(Map.of("error", "\u5bc6\u7801\u81f3\u5c11 8 \u4f4d")));
         }
         return Mono.empty();
     }
@@ -118,12 +123,19 @@ public class PasswordBookController {
     }
 
     @GetMapping(value={"/status"})
-    public Mono<ResponseEntity<?>> status() {
-        return this.currentUser().flatMap(user -> this.store.getMeta("master_salt:" + user).switchIfEmpty(this.store.getMeta("master_salt")).flatMap(s -> Mono.just((Object)ResponseEntity.ok(Map.of("initialized", true)))).switchIfEmpty(Mono.just((Object)ResponseEntity.ok(Map.of("initialized", false)))));
+    public Mono<ResponseEntity> status() {
+        return this.currentUser().flatMap(user -> {
+            String saltKey = "master_salt:" + user;
+            String mcKey = "must_change:" + user;
+            return this.store.getMeta(saltKey).flatMap(s -> this.store.getMeta(mcKey)
+                .map(v -> (ResponseEntity)ResponseEntity.ok(Map.of("initialized", true, "mustChange", true)))
+                .switchIfEmpty(Mono.defer(() -> wrap((ResponseEntity)ResponseEntity.ok(Map.of("initialized", true, "mustChange", false)))))
+            ).switchIfEmpty(Mono.defer(() -> wrap((ResponseEntity)ResponseEntity.ok(Map.of("initialized", false, "mustChange", false)))));
+        });
     }
 
     @PostMapping(value={"/unlock"})
-    public Mono<ResponseEntity<?>> unlock(@RequestBody Map<String, String> body) {
+    public Mono<ResponseEntity> unlock(@RequestBody Map<String, String> body) {
         String password = body.get("password");
         if (password == null || password.isEmpty()) {
             return this.badRequest("\u5bc6\u7801\u4e0d\u80fd\u4e3a\u7a7a");
@@ -131,52 +143,69 @@ public class PasswordBookController {
         return this.currentUser().flatMap(user -> {
             String saltKey = "master_salt:" + user;
             String verKey = "verifier:" + user;
-            return this.store.getMeta("master_salt").flatMap(legacySaltB64 -> this.migrateLegacy((String)legacySaltB64, password, saltKey, verKey, (String)user)).switchIfEmpty(this.store.getMeta(saltKey).flatMap(saltB64 -> this.verifyWith((String)saltB64, password, verKey, (String)user))).switchIfEmpty(Mono.just((Object)ResponseEntity.ok(Map.of("initialized", false))));
+            return this.store.getMeta(saltKey).flatMap(saltB64 -> this.verifyWith((String)saltB64, password, verKey, (String)user)).switchIfEmpty(Mono.defer(() -> {
+                if (!DEFAULT_PASSWORD.equals(password)) {
+                    return wrap((ResponseEntity)ResponseEntity.status((int)401).body(Map.of("error", "\u65b0\u8d26\u53f7\u8bf7\u4f7f\u7528\u9ed8\u8ba4\u5bc6\u7801 12345678 \u89e3\u9501")));
+                }
+                return this.bootstrapDefault((String)user, saltKey, verKey);
+            }));
         });
     }
 
+    private Mono<ResponseEntity> bootstrapDefault(String user, String saltKey, String verKey) {
+        try {
+            byte[] salt = this.crypto.randomSalt();
+            SecretKey key = this.crypto.deriveKey(DEFAULT_PASSWORD, salt);
+            String ver = this.crypto.encrypt(this.crypto.verifierPlaintext(), key);
+            return this.store.setMeta(saltKey, Base64.getEncoder().encodeToString(salt)).then(this.store.setMeta(verKey, ver)).then(this.store.setMeta("must_change:" + user, "true")).then(Mono.defer(() -> wrap((ResponseEntity)ResponseEntity.ok(Map.of("token", this.session.create(key, user), "initialized", true, "mustChange", true)))));
+        }
+        catch (Exception e) {
+            return Mono.just((ResponseEntity)ResponseEntity.status((int)500).body(Map.of("error", "\u521d\u59cb\u5316\u5931\u8d25")));
+        }
+    }
+
     @PostMapping(value={"/setup"})
-    public Mono<ResponseEntity<?>> setup(@RequestBody Map<String, String> body) {
+    public Mono<ResponseEntity> setup(@RequestBody Map<String, String> body) {
         String password = body.get("password");
         ResponseEntity invalid = (ResponseEntity)this.validatePassword(password).block();
         if (invalid != null) {
-            return Mono.just((Object)invalid);
+            return Mono.just(invalid);
         }
         return this.currentUser().flatMap(user -> {
             String saltKey = "master_salt:" + user;
             String verKey = "verifier:" + user;
-            return this.store.getMeta(saltKey).flatMap(existing -> Mono.just((Object)ResponseEntity.status((int)409).body(Map.of("error", "\u5df2\u521d\u59cb\u5316\uff0c\u8bf7\u76f4\u63a5\u89e3\u9501")))).switchIfEmpty(Mono.defer(() -> {
+            return this.store.getMeta(saltKey).flatMap(existing -> Mono.just((ResponseEntity)ResponseEntity.status((int)409).body(Map.of("error", "\u5df2\u521d\u59cb\u5316\uff0c\u8bf7\u76f4\u63a5\u89e3\u9501")))).switchIfEmpty(Mono.defer(() -> {
                 try {
                     byte[] salt = this.crypto.randomSalt();
                     SecretKey key = this.crypto.deriveKey(password, salt);
                     String ver = this.crypto.encrypt(this.crypto.verifierPlaintext(), key);
-                    return this.store.setMeta(saltKey, Base64.getEncoder().encodeToString(salt)).then(this.store.setMeta(verKey, ver)).then(Mono.fromCallable(() -> ResponseEntity.ok(Map.of("token", this.session.create(key, (String)user), "initialized", true))));
+                    return this.store.setMeta(saltKey, Base64.getEncoder().encodeToString(salt)).then(this.store.setMeta(verKey, ver)).then(Mono.defer(() -> wrap((ResponseEntity)ResponseEntity.ok(Map.of("token", this.session.create(key, (String)user), "initialized", true)))));
                 }
                 catch (Exception e) {
-                    return Mono.just((Object)ResponseEntity.status((int)500).body(Map.of("error", "\u521d\u59cb\u5316\u5931\u8d25")));
+                    return Mono.just((ResponseEntity)ResponseEntity.status((int)500).body(Map.of("error", "\u521d\u59cb\u5316\u5931\u8d25")));
                 }
             }));
         });
     }
 
-    private Mono<ResponseEntity<?>> verifyWith(String saltB64, String password, String verKey, String user) {
+    private Mono<ResponseEntity> verifyWith(String saltB64, String password, String verKey, String user) {
         SecretKey key;
         try {
             key = this.crypto.deriveKey(password, Base64.getDecoder().decode(saltB64));
         }
         catch (Exception e) {
-            return Mono.just((Object)ResponseEntity.status((int)500).body(Map.of("error", "\u6d3e\u751f\u5bc6\u94a5\u5931\u8d25")));
+            return Mono.just((ResponseEntity)ResponseEntity.status((int)500).body(Map.of("error", "\u6d3e\u751f\u5bc6\u94a5\u5931\u8d25")));
         }
         return this.store.getMeta(verKey).flatMap(verB64 -> this.verifyAndToken(key, (String)verB64, user)).switchIfEmpty(this.setupVerifier(key, verKey, user));
     }
 
-    private Mono<ResponseEntity<?>> migrateLegacy(String legacySaltB64, String password, String saltKey, String verKey, String user) {
+    private Mono<ResponseEntity> migrateLegacy(String legacySaltB64, String password, String saltKey, String verKey, String user) {
         SecretKey key;
         try {
             key = this.crypto.deriveKey(password, Base64.getDecoder().decode(legacySaltB64));
         }
         catch (Exception e) {
-            return Mono.just((Object)ResponseEntity.status((int)500).body(Map.of("error", "\u6d3e\u751f\u5bc6\u94a5\u5931\u8d25")));
+            return Mono.just((ResponseEntity)ResponseEntity.status((int)500).body(Map.of("error", "\u6d3e\u751f\u5bc6\u94a5\u5931\u8d25")));
         }
         return this.store.getMeta("verifier").flatMap(legacyVerB64 -> {
             String ver;
@@ -188,19 +217,19 @@ public class PasswordBookController {
                 ok = false;
             }
             if (!ok) {
-                return Mono.just((Object)ResponseEntity.status((int)401).body(Map.of("error", "\u4e8c\u6b21\u5bc6\u7801\u9519\u8bef")));
+                return Mono.just((ResponseEntity)ResponseEntity.status((int)401).body(Map.of("error", "\u4e8c\u6b21\u5bc6\u7801\u9519\u8bef")));
             }
             try {
                 ver = this.crypto.encrypt(this.crypto.verifierPlaintext(), key);
             }
             catch (Exception e) {
-                return Mono.just((Object)ResponseEntity.status((int)500).body(Map.of("error", "\u521d\u59cb\u5316\u5931\u8d25")));
+                return Mono.just((ResponseEntity)ResponseEntity.status((int)500).body(Map.of("error", "\u521d\u59cb\u5316\u5931\u8d25")));
             }
             return this.store.setMeta(saltKey, legacySaltB64).then(this.store.setMeta(verKey, ver)).then(this.tokenResponse(key, user));
         }).switchIfEmpty(Mono.empty());
     }
 
-    private Mono<ResponseEntity<?>> verifyAndToken(SecretKey key, String verB64, String user) {
+    private Mono<ResponseEntity> verifyAndToken(SecretKey key, String verB64, String user) {
         try {
             String dec = this.crypto.decrypt(verB64, key);
             if (this.crypto.verifierPlaintext().equals(dec)) {
@@ -210,25 +239,25 @@ public class PasswordBookController {
         catch (Exception exception) {
             // empty catch block
         }
-        return Mono.just((Object)ResponseEntity.status((int)401).body(Map.of("error", "\u4e8c\u6b21\u5bc6\u7801\u9519\u8bef")));
+        return Mono.just((ResponseEntity)ResponseEntity.status((int)401).body(Map.of("error", "\u4e8c\u6b21\u5bc6\u7801\u9519\u8bef")));
     }
 
-    private Mono<ResponseEntity<?>> setupVerifier(SecretKey key, String verKey, String user) {
+    private Mono<ResponseEntity> setupVerifier(SecretKey key, String verKey, String user) {
         try {
             String ver = this.crypto.encrypt(this.crypto.verifierPlaintext(), key);
             return this.store.setMeta(verKey, ver).then(this.tokenResponse(key, user));
         }
         catch (Exception e) {
-            return Mono.just((Object)ResponseEntity.status((int)500).body(Map.of("error", "\u521d\u59cb\u5316\u5931\u8d25")));
+            return Mono.just((ResponseEntity)ResponseEntity.status((int)500).body(Map.of("error", "\u521d\u59cb\u5316\u5931\u8d25")));
         }
     }
 
-    private Mono<ResponseEntity<?>> tokenResponse(SecretKey key, String user) {
-        return Mono.fromCallable(() -> ResponseEntity.ok(Map.of("token", this.session.create(key, user))));
+    private Mono<ResponseEntity> tokenResponse(SecretKey key, String user) {
+        return Mono.defer(() -> wrap((ResponseEntity)ResponseEntity.ok(Map.of("token", this.session.create(key, user)))));
     }
 
     @PostMapping(value={"/change-password"})
-    public Mono<ResponseEntity<?>> changePassword(@RequestBody Map<String, String> body) {
+    public Mono<ResponseEntity> changePassword(@RequestBody Map<String, String> body) {
         String oldPassword = body.get("oldPassword");
         String newPassword = body.get("newPassword");
         if (oldPassword == null || newPassword == null || newPassword.isEmpty()) {
@@ -236,7 +265,7 @@ public class PasswordBookController {
         }
         ResponseEntity invalid = (ResponseEntity)this.validatePassword(newPassword).block();
         if (invalid != null) {
-            return Mono.just((Object)invalid);
+            return Mono.just(invalid);
         }
         if (oldPassword.equals(newPassword)) {
             return this.badRequest("\u65b0\u5bc6\u7801\u4e0d\u80fd\u4e0e\u65e7\u5bc6\u7801\u76f8\u540c");
@@ -251,15 +280,15 @@ public class PasswordBookController {
                     String newVer = this.crypto.encrypt(this.crypto.verifierPlaintext(), newKey);
                     String newSaltB64 = Base64.getEncoder().encodeToString(newSalt);
                     SecretKey fNewKey = newKey;
-                    return this.reEncryptNotes((SecretKey)oldKey, fNewKey, (String)user, saltKey, verKey, newSaltB64, newVer).then(Mono.fromCallable(() -> {
+                    return this.reEncryptNotes((SecretKey)oldKey, fNewKey, (String)user, saltKey, verKey, newSaltB64, newVer).then(this.store.deleteMeta("must_change:" + (String)user)).then(Mono.defer(() -> {
                         this.session.revokeUser((String)user);
-                        return ResponseEntity.ok(Map.of("token", this.session.create(fNewKey, (String)user), "mustChange", false));
+                        return wrap((ResponseEntity)ResponseEntity.ok(Map.of("token", this.session.create(fNewKey, (String)user), "mustChange", false)));
                     }));
                 }
                 catch (Exception e) {
-                    return Mono.just((Object)ResponseEntity.status((int)500).body(Map.of("error", "\u52a0\u5bc6\u5931\u8d25")));
+                    return Mono.just((ResponseEntity)ResponseEntity.status((int)500).body(Map.of("error", "\u52a0\u5bc6\u5931\u8d25")));
                 }
-            }).switchIfEmpty(Mono.just((Object)ResponseEntity.status((int)401).body(Map.of("error", "\u65e7\u5bc6\u7801\u9519\u8bef"))));
+            }).switchIfEmpty(Mono.just((ResponseEntity)ResponseEntity.status((int)401).body(Map.of("error", "\u65e7\u5bc6\u7801\u9519\u8bef"))));
         });
     }
 
@@ -280,7 +309,7 @@ public class PasswordBookController {
                 catch (Exception e) {
                     ok = false;
                 }
-                return ok ? Mono.just((Object)key) : Mono.empty();
+                return ok ? Mono.just((SecretKey)key) : Mono.empty();
             });
         });
     }
@@ -305,17 +334,17 @@ public class PasswordBookController {
                 }
             }
             return Flux.range((int)0, (int)notes.size()).concatMap(i -> {
-                PasswordBookNote n = (PasswordBookNote)((Object)((Object)((Object)notes.get((int)i))));
+                PasswordBookNote n = (PasswordBookNote)notes.get((int)i);
                 n.getSpec().setTitleData((String)newTitles.get((int)i));
                 n.getSpec().setContentData((String)newContents.get((int)i));
                 return this.store.updateNote(n).onErrorResume(err -> this.rollback((List<PasswordBookNote>)notes, (List<String>)oldTitles, (List<String>)oldContents).then(Mono.error((Throwable)err)));
-            }).then(this.store.setMeta(saltKey, newSaltB64)).then(this.store.setMeta(verKey, newVer)).then(this.store.setMeta("master_salt", newSaltB64)).then(this.store.setMeta("verifier", newVer));
+            }).then(this.store.setMeta(saltKey, newSaltB64)).then(this.store.setMeta(verKey, newVer));
         });
     }
 
     private Mono<Void> rollback(List<PasswordBookNote> notes, List<String> oldTitles, List<String> oldContents) {
         return Flux.range((int)0, (int)notes.size()).flatMap(i -> {
-            PasswordBookNote n = (PasswordBookNote)((Object)((Object)notes.get((int)i)));
+            PasswordBookNote n = (PasswordBookNote)notes.get((int)i);
             n.getSpec().setTitleData((String)oldTitles.get((int)i));
             n.getSpec().setContentData((String)oldContents.get((int)i));
             return this.store.updateNote(n);
@@ -323,13 +352,13 @@ public class PasswordBookController {
     }
 
     @GetMapping(value={"/notes"})
-    public Mono<ResponseEntity<?>> list(@RequestHeader(value="X-PasswordBook-Token") String token) {
+    public Mono<ResponseEntity> list(@RequestHeader(value="X-PasswordBook-Token") String token, @RequestParam(value="category", required=false) String category) {
         return this.currentUser().flatMap(user -> {
             SecretKey key = this.authedKey(token, (String)user);
             if (key == null) {
                 return this.unauthorized();
             }
-            return this.store.listNotes().filter(n -> this.canRead((PasswordBookNote)((Object)((Object)n)), (String)user)).map(n -> {
+            return this.store.listNotes().filter(n -> this.canRead(n, (String)user)).filter(n -> category == null || category.isEmpty() || category.equals(n.getSpec().getCategory())).map(n -> {
                 Object preview;
                 LinkedHashMap<String, Object> item = new LinkedHashMap<String, Object>();
                 item.put("id", n.getMetadata().getName());
@@ -342,38 +371,40 @@ public class PasswordBookController {
                 }
                 item.put("preview", preview);
                 item.put("contentType", ct);
+                item.put("category", n.getSpec().getCategory());
                 item.put("owner", n.getSpec().getOwner());
                 item.put("updatedAt", n.getSpec().getUpdatedAt());
                 return item;
-            }).collectList().map(ResponseEntity::ok);
+            }).collectList().map(list -> (ResponseEntity)ResponseEntity.ok(list));
         });
     }
 
     @GetMapping(value={"/notes/detail"})
-    public Mono<ResponseEntity<?>> get(@RequestHeader(value="X-PasswordBook-Token") String token, @RequestParam(value="id") String id) {
+    public Mono<ResponseEntity> get(@RequestHeader(value="X-PasswordBook-Token") String token, @RequestParam(value="id") String id) {
         return this.currentUser().flatMap(user -> {
             SecretKey key = this.authedKey(token, (String)user);
             if (key == null) {
                 return this.unauthorized();
             }
             return this.store.getNote(id).map(n -> {
-                if (!this.canRead((PasswordBookNote)((Object)((Object)n)), (String)user)) {
-                    return ResponseEntity.status((int)403).body(Map.of("error", "\u65e0\u6743\u8bbf\u95ee\u8be5\u8bb0\u5f55"));
+                if (!this.canRead(n, (String)user)) {
+                    return (ResponseEntity)ResponseEntity.status((int)403).body(Map.of("error", "\u65e0\u6743\u8bbf\u95ee\u8be5\u8bb0\u5f55"));
                 }
                 LinkedHashMap<String, Object> body = new LinkedHashMap<String, Object>();
                 body.put("id", n.getMetadata().getName());
                 body.put("title", this.tryDecrypt(n.getSpec().getTitleData(), key));
                 body.put("content", this.tryDecrypt(n.getSpec().getContentData(), key));
                 body.put("contentType", n.getSpec().getContentType());
+                body.put("category", n.getSpec().getCategory());
                 body.put("createdAt", n.getSpec().getCreatedAt());
                 body.put("updatedAt", n.getSpec().getUpdatedAt());
-                return ResponseEntity.ok(body);
-            }).switchIfEmpty(Mono.just((Object)ResponseEntity.status((int)404).body(Map.of("error", "\u672a\u627e\u5230"))));
+                return (ResponseEntity)ResponseEntity.ok(body);
+            }).switchIfEmpty(Mono.defer(() -> wrap((ResponseEntity)ResponseEntity.status((int)404).body(Map.of("error", "\u672a\u627e\u5230")))));
         });
     }
 
     @PostMapping(value={"/notes"})
-    public Mono<ResponseEntity<?>> create(@RequestHeader(value="X-PasswordBook-Token") String token, @RequestBody Map<String, String> body) {
+    public Mono<ResponseEntity> create(@RequestHeader(value="X-PasswordBook-Token") String token, @RequestBody Map<String, String> body) {
         return this.currentUser().flatMap(user -> {
             PasswordBookNote note;
             String ct;
@@ -401,19 +432,20 @@ public class PasswordBookController {
                 spec.setContentData(this.crypto.encrypt(content == null ? "" : content, key));
                 spec.setContentType(ct);
                 spec.setOwner((String)user);
+                spec.setCategory((String)body.get("category"));
                 spec.setCreatedAt(now);
                 spec.setUpdatedAt(now);
                 note.setSpec(spec);
             }
             catch (Exception e) {
-                return Mono.just((Object)ResponseEntity.status((int)500).body(Map.of("error", "\u52a0\u5bc6\u5931\u8d25")));
+                return Mono.just((ResponseEntity)ResponseEntity.status((int)500).body(Map.of("error", "\u52a0\u5bc6\u5931\u8d25")));
             }
-            return this.store.createNote(note).map(saved -> ResponseEntity.ok(Map.of("id", saved.getMetadata().getName())));
+            return this.store.createNote(note).map(saved -> (ResponseEntity)ResponseEntity.ok(Map.of("id", saved.getMetadata().getName())));
         });
     }
 
     @PutMapping(value={"/notes"})
-    public Mono<ResponseEntity<?>> update(@RequestHeader(value="X-PasswordBook-Token") String token, @RequestBody Map<String, String> body) {
+    public Mono<ResponseEntity> update(@RequestHeader(value="X-PasswordBook-Token") String token, @RequestBody Map<String, String> body) {
         return this.currentUser().flatMap(user -> {
             String ct;
             SecretKey key = this.authedKey(token, (String)user);
@@ -439,21 +471,24 @@ public class PasswordBookController {
                     n.getSpec().setTitleData(this.crypto.encrypt(title, key));
                     n.getSpec().setContentData(this.crypto.encrypt(content == null ? "" : content, key));
                     n.getSpec().setContentType(ct);
+                    if (body.get("category") != null) {
+                        n.getSpec().setCategory((String)body.get("category"));
+                    }
                     if (n.getSpec().getOwner() == null) {
                         n.getSpec().setOwner((String)user);
                     }
                     n.getSpec().setUpdatedAt(System.currentTimeMillis());
                 }
                 catch (Exception e) {
-                    return Mono.just((Object)ResponseEntity.status((int)500).body(Map.of("error", "\u52a0\u5bc6\u5931\u8d25")));
+                    return Mono.just((ResponseEntity)ResponseEntity.status((int)500).body(Map.of("error", "\u52a0\u5bc6\u5931\u8d25")));
                 }
-                return this.store.updateNote((PasswordBookNote)((Object)((Object)n))).map(saved -> ResponseEntity.ok(Map.of("id", id))).switchIfEmpty(Mono.just((Object)ResponseEntity.status((int)404).body(Map.of("error", "\u672a\u627e\u5230"))));
-            }).switchIfEmpty(Mono.just((Object)ResponseEntity.status((int)404).body(Map.of("error", "\u672a\u627e\u5230"))));
+                return this.store.updateNote(n).map(saved -> (ResponseEntity)ResponseEntity.ok(Map.of("id", id))).switchIfEmpty(Mono.defer(() -> wrap((ResponseEntity)ResponseEntity.status((int)404).body(Map.of("error", "\u672a\u627e\u5230")))));
+            }).switchIfEmpty(Mono.defer(() -> wrap((ResponseEntity)ResponseEntity.status((int)404).body(Map.of("error", "\u672a\u627e\u5230")))));
         });
     }
 
     @DeleteMapping(value={"/notes"})
-    public Mono<ResponseEntity<?>> delete(@RequestHeader(value="X-PasswordBook-Token") String token, @RequestParam(value="id") String id) {
+    public Mono<ResponseEntity> delete(@RequestHeader(value="X-PasswordBook-Token") String token, @RequestParam(value="id") String id) {
         return this.currentUser().flatMap(user -> {
             SecretKey key = this.authedKey(token, (String)user);
             if (key == null) {
@@ -466,22 +501,22 @@ public class PasswordBookController {
                 if (n.getSpec().getOwner() == null || !user.equals(n.getSpec().getOwner())) {
                     return this.forbidden();
                 }
-                return this.store.deleteNote(id).then(Mono.just((Object)ResponseEntity.ok(Map.of("id", id))));
-            }).switchIfEmpty(Mono.just((Object)ResponseEntity.status((int)404).body(Map.of("error", "\u672a\u627e\u5230"))));
+                return this.store.deleteNote(id).then(wrap((ResponseEntity)ResponseEntity.ok(Map.of("id", id))));
+            }).switchIfEmpty(Mono.defer(() -> wrap((ResponseEntity)ResponseEntity.status((int)404).body(Map.of("error", "\u672a\u627e\u5230")))));
         });
     }
 
     @PostMapping(value={"/lock"})
-    public Mono<ResponseEntity<?>> lock(@RequestHeader(value="X-PasswordBook-Token") String token) {
+    public Mono<ResponseEntity> lock(@RequestHeader(value="X-PasswordBook-Token") String token) {
         this.session.remove(token);
-        return Mono.just((Object)ResponseEntity.ok(Map.of("ok", true)));
+        return Mono.just((ResponseEntity)ResponseEntity.ok(Map.of("ok", true)));
     }
 
     @PostMapping(value={"/revoke"})
-    public Mono<ResponseEntity<?>> revoke(@RequestHeader(value="X-PasswordBook-Token") String token) {
+    public Mono<ResponseEntity> revoke(@RequestHeader(value="X-PasswordBook-Token") String token) {
         return this.currentUser().flatMap(user -> {
             this.session.revokeUser((String)user);
-            return Mono.just((Object)ResponseEntity.ok(Map.of("ok", true)));
+            return Mono.just((ResponseEntity)ResponseEntity.ok(Map.of("ok", true)));
         });
     }
 
@@ -507,4 +542,3 @@ public class PasswordBookController {
         return s.replaceAll("\\s+", " ").trim();
     }
 }
-

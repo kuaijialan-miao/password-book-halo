@@ -40,7 +40,7 @@ public class PasswordBookStore {
                 return Mono.empty();
             }
             String value = m.getSpec().getData().get(key);
-            return value != null ? Mono.just((Object)value) : Mono.empty();
+            return value != null ? Mono.just(value) : Mono.empty();
         });
     }
 
@@ -53,7 +53,7 @@ public class PasswordBookStore {
                 meta.getSpec().setData(new HashMap<String, String>());
             }
             meta.getSpec().getData().put(key, value);
-            return this.client.update((Extension)meta);
+            return this.client.update(meta);
         }).switchIfEmpty(Mono.defer(() -> {
             PasswordBookMeta meta = new PasswordBookMeta();
             meta.setMetadata((MetadataOperator)new Metadata());
@@ -62,7 +62,7 @@ public class PasswordBookStore {
             spec.setData(new HashMap<String, String>());
             spec.getData().put(key, value);
             meta.setSpec(spec);
-            return this.client.create((Extension)meta);
+            return this.client.create(meta);
         })).then();
     }
 
@@ -72,7 +72,7 @@ public class PasswordBookStore {
                 return Mono.empty();
             }
             meta.getSpec().getData().remove(key);
-            return this.client.update((Extension)meta);
+            return this.client.update(meta);
         }).then();
     }
 
@@ -85,11 +85,11 @@ public class PasswordBookStore {
     }
 
     public Mono<PasswordBookNote> createNote(PasswordBookNote note) {
-        return this.client.create((Extension)note);
+        return this.client.create(note);
     }
 
     public Mono<PasswordBookNote> updateNote(PasswordBookNote note) {
-        return this.client.update((Extension)note);
+        return this.client.update(note);
     }
 
     public Mono<Void> deleteNote(String id) {
