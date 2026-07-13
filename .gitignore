@@ -12,3 +12,6 @@
 # 系统
 .DS_Store
 Thumbs.db
+
+# 发布产物（作为 GitHub Release 资产，不入库）
+password-book-*.jar

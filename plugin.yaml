@@ -5,14 +5,26 @@ metadata:
 spec:
   enabled: true
   requires: ">=2.22.5"
-  version: "1.2.1"
+  version: "1.3.1"
   author:
     name: miaohaha
     website: https://miaohaha.cn
   logo: logo.png
   homepage: https://miaohaha.cn
   displayName: "加密记事本"
-  description: "加密记事本：在 Halo 后台「工具」中为当前登录用户保存端到端加密的笔记。内容使用 AES-256-GCM（主密钥由二次密码经 PBKDF2 派生，服务端不存储明文密码与主密钥）加密后，存入 Halo 的扩展存储；底层数据库取决于你部署 Halo 时所使用的存储（如 MySQL、PostgreSQL 或内置 H2），并非固定写入某一种数据库。支持纯文本 / 富文本编辑，图片随笔记内容一并加密。无前台页面。"
+  description: >-
+    加密记事本：在 Halo 后台「工具」中为当前登录用户保存加密笔记。
+
+    加密与存储（服务端加密存储，非端到端加密）：
+    - 主密码与笔记明文会通过插件后端接口传输；后端使用 AES-256-GCM（主密钥由主密码经 PBKDF2-HMAC-SHA256 派生，60 万次迭代）加密后，作为 Halo 扩展自定义资源（Extension）持久化，存储在你的 Halo 所连接的存储中（如 MySQL、PostgreSQL 或内置 H2，取决于你的 Halo 部署）。插件不存储明文密码、主密钥或派生盐。
+    - 富文本中的图片不随文本加密：插入图片时，图片作为 Halo 附件上传（与站点其他附件同一存储），笔记中仅保存图片链接；仅文本/标题使用主密码加密。
+    - 每个用户使用独立的主密钥与盐（master_salt:<用户名> / verifier:<用户名>），用户之间密钥隔离；无前台页面。
+
+    数据安全与数据管理：
+    - 主密码遗失：主密码仅存在于你的记忆中，服务端不保存明文密码且无法找回；遗忘主密码将导致该用户全部加密笔记无法解密（可通过「迁移/重置」用默认密码 12345678 重新初始化，但原有加密内容将不可恢复）。请务必牢记主密码。
+    - 备份与迁移：笔记数据即 Halo 扩展资源，随 Halo 整机备份（数据库 + 附件）一同保留；迁移 Halo 时一并迁移数据库与附件目录即可。
+    - 删除：可在后台逐条删除笔记；卸载插件不会自动删除已写入的扩展资源，如需彻底清除请在卸载后通过 Halo 扩展管理或数据库清理 passwordbooknote / passwordbookmeta 资源。
+    - 性能：高价密码学操作在受限工作线程池中执行，避免阻塞 Halo 请求线程。
   license:
     - name: "GPL-3.0"
       url: "https://www.gnu.org/licenses/gpl-3.0.html"
