@@ -1,0 +1,18 @@
+apiVersion: plugin.halo.run/v1alpha1
+kind: Plugin
+metadata:
+  name: password-book
+spec:
+  enabled: true
+  requires: ">=2.22.5"
+  version: "1.2.1"
+  author:
+    name: miaohaha
+    website: https://miaohaha.cn
+  logo: logo.png
+  homepage: https://miaohaha.cn
+  displayName: "加密记事本"
+  description: "加密记事本：在 Halo 后台「工具」中为当前登录用户保存端到端加密的笔记。内容使用 AES-256-GCM（主密钥由二次密码经 PBKDF2 派生，服务端不存储明文密码与主密钥）加密后，存入 Halo 的扩展存储；底层数据库取决于你部署 Halo 时所使用的存储（如 MySQL、PostgreSQL 或内置 H2），并非固定写入某一种数据库。支持纯文本 / 富文本编辑，图片随笔记内容一并加密。无前台页面。"
+  license:
+    - name: "Proprietary"
+      url: "https://miaohaha.cn/license/password-book"
