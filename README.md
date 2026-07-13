@@ -2,19 +2,19 @@
 
 在 Halo 后台「工具」中为**当前登录用户**保存加密笔记。每个用户独立加密，互不可见。
 
-> 本项目以 GPL-3.0 开源。后端为完整可构建的 Gradle 工程（`build.gradle` + `settings.gradle` + `src/`）。`console/` 目录为随插件分发的**预构建控制台静态资源**（Halo 后台「工具」页面），其源码以压缩产物形式提供、未单独发布构建工程。
+> 本项目以 GPL-3.0 开源。后端为完整可构建的 Gradle 工程（`build.gradle` + `settings.gradle` + `src/`）。前端控制台为完整可构建的 Vue 3 工程（`console-ui/`，使用 Halo 官方 `@halo-dev/ui-plugin-bundler-kit` 构建），构建产物输出到 `src/main/resources/console/` 并随插件分发。
 
 ## 功能
 
 - 主密码保护：首次使用默认主密码 `12345678` 解锁，建议立即修改为 8 位以上密码。
 - 服务端加密存储：笔记标题与文本使用 **AES-256-GCM** 加密（主密钥由主密码经 PBKDF2-HMAC-SHA256 派生，60 万次迭代），作为 Halo 扩展资源持久化。
 - 图片走 Halo 附件：富文本中的图片以 Halo 附件形式存储（与站点附件同一位置），笔记中仅保存图片链接；仅文本加密。
-- 分类：可为每条笔记设置分类，列表按分类筛选。
+- 分类管理（v1.4.0）：顶部标签栏「全部 / 各分类 / ＋」——点击标签按分类筛选，点击「＋」新增分类，悬停标签上的 ✎ 改名、✕ 删除、⋮⋮ 拖动排序。分类按用户隔离，为明文标签（非加密内容）。
 - 多用户隔离：每个用户拥有独立的主密钥与盐，A 用户无法读取 B 用户的笔记。
 
 ## 安装
 
-1. 在 Halo 后台「插件」→「安装插件」上传 `password-book-1.3.1.jar`，或在应用市场安装。
+1. 在 Halo 后台「插件」→「安装插件」上传 `password-book-1.4.0.jar`，或在应用市场安装。
 2. 启用插件后，左侧「工具」下出现「加密记事本」菜单。
 
 ## 使用
@@ -45,10 +45,19 @@
 后端（Gradle，完整可构建）：
 
 ```bash
-./gradlew build        # 产物：build/libs/password-book-1.3.1.jar
+./gradlew build        # 产物：build/libs/password-book-1.4.0.jar
 ```
 
-> 前端控制台页面（`console/` 下的 `main.js` / `chunks` / `style.css`）为预构建资源，随插件打包分发；其构建工程未单独开源，仅以压缩产物形式随仓库提供。后端 Java 源码与 Gradle 构建脚本完整，可独立编译出等价插件。
+前端构建（独立工程 `console-ui/`）：
+
+```bash
+cd console-ui
+npm install
+npm run build          # 产物输出到 console-ui/build/dist
+npm run build:copy     # 将产物拷贝到 ../src/main/resources/console
+```
+
+> 前后端源码均完整可构建：后端为 Gradle 工程，前端为 Vue 3 工程（Halo 官方 `@halo-dev/ui-plugin-bundler-kit`）。构建后的 `console/` 静态资源随插件 jar 分发。
 
 ## 许可证
 

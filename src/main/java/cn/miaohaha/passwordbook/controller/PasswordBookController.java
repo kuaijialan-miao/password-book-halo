@@ -1,16 +1,20 @@
 package cn.miaohaha.passwordbook.controller;
 
+import cn.miaohaha.passwordbook.extension.PasswordBookCategory;
 import cn.miaohaha.passwordbook.extension.PasswordBookNote;
 import cn.miaohaha.passwordbook.repository.PasswordBookStore;
 import cn.miaohaha.passwordbook.service.CryptoService;
 import cn.miaohaha.passwordbook.service.PasswordBookSession;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.Callable;
+import java.util.stream.Collectors;
 import javax.crypto.SecretKey;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
@@ -587,6 +591,199 @@ public class PasswordBookController {
             this.session.revokeUser((String) user);
             return Mono.just((ResponseEntity) ResponseEntity.ok(Map.of("ok", true)));
         });
+    }
+
+    // ===== 分类管理 =====
+    // GET /categories：返回合并列表（managed 实体 + virtual 来自笔记的分类名）
+    @GetMapping(value = {"/categories"})
+    public Mono<ResponseEntity> listCategories(@RequestHeader(value = "X-PasswordBook-Token") String token) {
+        return this.currentUser().flatMap(user -> {
+            SecretKey key = this.authedKey(token, (String) user);
+            if (key == null) {
+                return this.unauthorized();
+            }
+            return this.store.listCategories((String) user).collectList()
+                .flatMap(managed -> this.store.listNoteCategories((String) user)
+                    .map(virtuals -> (ResponseEntity) ResponseEntity.ok(this.mergeCategories(managed, virtuals))));
+        });
+    }
+
+    // POST /categories：新增分类（同名已存在则直接返回已有）
+    @PostMapping(value = {"/categories"})
+    public Mono<ResponseEntity> createCategory(@RequestHeader(value = "X-PasswordBook-Token") String token,
+                                               @RequestBody Map<String, String> body) {
+        return this.currentUser().flatMap(user -> {
+            SecretKey key = this.authedKey(token, (String) user);
+            if (key == null) {
+                return this.unauthorized();
+            }
+            String rawName = body.get("name");
+            if (rawName == null || rawName.trim().isEmpty()) {
+                return this.badRequest("分类名不能为空");
+            }
+            final String name = rawName.trim();
+            return this.store.listCategories((String) user).collectList().flatMap(existing -> {
+                for (PasswordBookCategory c : existing) {
+                    if (name.equals(c.getSpec().getName())) {
+                        return wrap((ResponseEntity) ResponseEntity.ok(this.catToMap(c, true)));
+                    }
+                }
+                int maxOrder = existing.stream()
+                        .mapToInt(c -> c.getSpec().getOrder() == null ? 0 : c.getSpec().getOrder()).max().orElse(0);
+                PasswordBookCategory cat = this.newCategory((String) user, name, maxOrder + 1);
+                return this.store.createCategory(cat)
+                        .map(saved -> (ResponseEntity) ResponseEntity.ok(this.catToMap(saved, true)));
+            });
+        });
+    }
+
+    // PUT /categories：改名 + 回写关联笔记（id 为空表示 virtual，先建实体再回写）
+    @PutMapping(value = {"/categories"})
+    public Mono<ResponseEntity> renameCategory(@RequestHeader(value = "X-PasswordBook-Token") String token,
+                                               @RequestBody Map<String, String> body) {
+        return this.currentUser().flatMap(user -> {
+            SecretKey key = this.authedKey(token, (String) user);
+            if (key == null) {
+                return this.unauthorized();
+            }
+            String rawName = body.get("name");
+            if (rawName == null || rawName.trim().isEmpty()) {
+                return this.badRequest("分类名不能为空");
+            }
+            final String newName = rawName.trim();
+            String id = body.get("id");
+            String oldName = body.get("oldName");
+            if (id == null || id.isEmpty()) {
+                // virtual：oldName 为待管理的分类名
+                if (oldName == null || oldName.isEmpty()) {
+                    return this.badRequest("缺少原分类名");
+                }
+                return this.store.listCategories((String) user).collectList().flatMap(existing -> {
+                    for (PasswordBookCategory c : existing) {
+                        if (newName.equals(c.getSpec().getName())) {
+                            // 目标已存在 managed：直接把旧名笔记迁移过去
+                            return this.store.reassignNotesCategory((String) user, oldName, newName)
+                                    .then(wrap((ResponseEntity) ResponseEntity.ok(this.catToMap(c, true))));
+                        }
+                    }
+                    int maxOrder = existing.stream()
+                            .mapToInt(c -> c.getSpec().getOrder() == null ? 0 : c.getSpec().getOrder()).max().orElse(0);
+                    PasswordBookCategory cat = this.newCategory((String) user, newName, maxOrder + 1);
+                    return this.store.createCategory(cat)
+                            .flatMap(saved -> this.store.reassignNotesCategory((String) user, oldName, newName)
+                                    .then(Mono.just((ResponseEntity) ResponseEntity.ok(this.catToMap(saved, true)))));
+                });
+            }
+            return this.store.getCategory(id).flatMap(c -> {
+                if (c.getSpec().getOwner() == null || !user.equals(c.getSpec().getOwner())) {
+                    return this.forbidden();
+                }
+                String old = c.getSpec().getName();
+                c.getSpec().setName(newName);
+                return this.store.updateCategory(c).flatMap(saved ->
+                        this.store.reassignNotesCategory((String) user, old, newName)
+                                .then(Mono.just((ResponseEntity) ResponseEntity.ok(this.catToMap(saved, true)))));
+            }).switchIfEmpty(Mono.defer(() -> wrap((ResponseEntity) ResponseEntity.status(404)
+                    .body(Map.of("error", "未找到")))));
+        });
+    }
+
+    // DELETE /categories：删分类 + 关联笔记归未分类（id 为空则由 name 处理 virtual）
+    @DeleteMapping(value = {"/categories"})
+    public Mono<ResponseEntity> deleteCategory(@RequestHeader(value = "X-PasswordBook-Token") String token,
+                                               @RequestParam(value = "id", required = false) String id,
+                                               @RequestParam(value = "name", required = false) String name) {
+        return this.currentUser().flatMap(user -> {
+            SecretKey key = this.authedKey(token, (String) user);
+            if (key == null) {
+                return this.unauthorized();
+            }
+            if (id != null && !id.isEmpty()) {
+                return this.store.getCategory(id).flatMap(c -> {
+                    if (c.getSpec().getOwner() == null || !user.equals(c.getSpec().getOwner())) {
+                        return this.forbidden();
+                    }
+                    String catName = c.getSpec().getName();
+                    return this.store.deleteCategory(id)
+                            .then(this.store.clearNotesCategory((String) user, catName))
+                            .then(wrap((ResponseEntity) ResponseEntity.ok(Map.of("id", id))));
+                }).switchIfEmpty(Mono.defer(() -> wrap((ResponseEntity) ResponseEntity.status(404)
+                        .body(Map.of("error", "未找到")))));
+            }
+            if (name != null && !name.isEmpty()) {
+                return this.store.clearNotesCategory((String) user, name)
+                        .then(wrap((ResponseEntity) ResponseEntity.ok(Map.of("name", name))));
+            }
+            return this.badRequest("缺少 id 或 name");
+        });
+    }
+
+    // PUT /categories/reorder：按 ids 顺序回写 order
+    @PutMapping(value = {"/categories/reorder"})
+    public Mono<ResponseEntity> reorderCategories(@RequestHeader(value = "X-PasswordBook-Token") String token,
+                                                  @RequestBody Map<String, Object> body) {
+        return this.currentUser().flatMap(user -> {
+            SecretKey key = this.authedKey(token, (String) user);
+            if (key == null) {
+                return this.unauthorized();
+            }
+            Object idsObj = body.get("ids");
+            if (!(idsObj instanceof List)) {
+                return this.badRequest("缺少 ids");
+            }
+            List<String> idList = ((List<?>) idsObj).stream().map(Object::toString).collect(Collectors.toList());
+            return Flux.range(0, idList.size()).flatMap(i -> {
+                String cid = idList.get(i);
+                return this.store.getCategory(cid).flatMap(c -> {
+                    if (c.getSpec().getOwner() == null || !user.equals(c.getSpec().getOwner())) {
+                        return Mono.empty();
+                    }
+                    c.getSpec().setOrder(i + 1);
+                    return this.store.updateCategory(c);
+                });
+            }).then(wrap((ResponseEntity) ResponseEntity.ok(Map.of("ok", true))));
+        });
+    }
+
+    private PasswordBookCategory newCategory(String user, String name, int order) {
+        PasswordBookCategory cat = new PasswordBookCategory();
+        cat.setMetadata((MetadataOperator) new Metadata());
+        cat.getMetadata().setName("pbc-" + UUID.randomUUID().toString().replace("-", ""));
+        PasswordBookCategory.Spec spec = new PasswordBookCategory.Spec();
+        spec.setName(name);
+        spec.setOwner(user);
+        spec.setOrder(order);
+        cat.setSpec(spec);
+        return cat;
+    }
+
+    private Map<String, Object> catToMap(PasswordBookCategory c, boolean managed) {
+        LinkedHashMap<String, Object> m = new LinkedHashMap<String, Object>();
+        m.put("id", c.getMetadata().getName());
+        m.put("name", c.getSpec().getName());
+        m.put("order", c.getSpec().getOrder());
+        m.put("managed", managed);
+        return m;
+    }
+
+    private List<Map<String, Object>> mergeCategories(List<PasswordBookCategory> managed, List<String> virtuals) {
+        List<Map<String, Object>> out = new ArrayList<Map<String, Object>>();
+        Set<String> managedNames = new HashSet<String>();
+        for (PasswordBookCategory c : managed) {
+            out.add(this.catToMap(c, true));
+            managedNames.add(c.getSpec().getName());
+        }
+        for (String vn : virtuals) {
+            if (!managedNames.contains(vn)) {
+                LinkedHashMap<String, Object> m = new LinkedHashMap<String, Object>();
+                m.put("id", null);
+                m.put("name", vn);
+                m.put("order", null);
+                m.put("managed", false);
+                out.add(m);
+            }
+        }
+        return out;
     }
 
     // 默认拒绝：owner 为空（遗留/归属不明）的记录不可读，避免越权访问（审核指南 4.3.1/4.3.2）

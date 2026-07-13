@@ -12,10 +12,12 @@
  */
 package cn.miaohaha.passwordbook.repository;
 
+import cn.miaohaha.passwordbook.extension.PasswordBookCategory;
 import cn.miaohaha.passwordbook.extension.PasswordBookMeta;
 import cn.miaohaha.passwordbook.extension.PasswordBookNote;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.List;
 import org.springframework.stereotype.Repository;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -94,6 +96,67 @@ public class PasswordBookStore {
 
     public Mono<Void> deleteNote(String id) {
         return this.client.fetch(PasswordBookNote.class, id).flatMap(arg_0 -> ((ReactiveExtensionClient)this.client).delete(arg_0)).then();
+    }
+
+    // ===== 分类（PasswordBookCategory）=====
+
+    private static final Comparator<PasswordBookCategory> CAT_BY_ORDER =
+            Comparator.comparing(c -> c.getSpec() == null || c.getSpec().getOrder() == null
+                    ? Integer.MAX_VALUE : c.getSpec().getOrder());
+
+    public Flux<PasswordBookCategory> listCategories(String owner) {
+        return this.client.list(PasswordBookCategory.class,
+                c -> c.getSpec() != null && owner.equals(c.getSpec().getOwner()), CAT_BY_ORDER);
+    }
+
+    public Mono<PasswordBookCategory> getCategory(String id) {
+        return this.client.fetch(PasswordBookCategory.class, id);
+    }
+
+    public Mono<PasswordBookCategory> createCategory(PasswordBookCategory cat) {
+        return this.client.create(cat);
+    }
+
+    public Mono<PasswordBookCategory> updateCategory(PasswordBookCategory cat) {
+        return this.client.update(cat);
+    }
+
+    public Mono<Void> deleteCategory(String id) {
+        return this.client.fetch(PasswordBookCategory.class, id)
+                .flatMap(c -> this.client.delete(c)).then();
+    }
+
+    // 聚合当前用户笔记中出现过的分类名（用于 virtual 标签，保证旧笔记的分类也能显示）
+    public Mono<List<String>> listNoteCategories(String owner) {
+        return this.listNotes()
+                .filter(n -> owner.equals(n.getSpec().getOwner())
+                        && n.getSpec().getCategory() != null && !n.getSpec().getCategory().isEmpty())
+                .map(n -> n.getSpec().getCategory())
+                .distinct()
+                .sort()
+                .collectList();
+    }
+
+    // 批量把某分类下的笔记改名（改名分类时回写）
+    public Mono<Void> reassignNotesCategory(String owner, String oldName, String newName) {
+        return this.listNotes()
+                .filter(n -> owner.equals(n.getSpec().getOwner()) && oldName.equals(n.getSpec().getCategory()))
+                .flatMap(n -> {
+                    n.getSpec().setCategory(newName);
+                    return this.updateNote(n);
+                }, 4)
+                .then();
+    }
+
+    // 批量把某分类下的笔记置为未分类（删除分类时）
+    public Mono<Void> clearNotesCategory(String owner, String name) {
+        return this.listNotes()
+                .filter(n -> owner.equals(n.getSpec().getOwner()) && name.equals(n.getSpec().getCategory()))
+                .flatMap(n -> {
+                    n.getSpec().setCategory("");
+                    return this.updateNote(n);
+                }, 4)
+                .then();
     }
 }
 
