@@ -1,24 +1,56 @@
 <template>
   <div class="pb-root">
-    <!-- 解锁 / 设置主密码 -->
-    <div v-if="mode === 'setup' || mode === 'unlock' || mode === 'change'" class="pb-auth">
-      <div class="pb-auth-card">
-        <h2>{{ mode === 'setup' ? '设置主密码' : (mode === 'change' ? '修改主密码' : '解锁加密记事本') }}</h2>
-        <p class="pb-hint" v-if="mode === 'setup'">首次使用，请设置主密码（至少 8 位）。该密码仅你知晓，遗忘将无法恢复。</p>
-        <p class="pb-hint" v-if="mode === 'unlock' && !status.initialized">新账号请使用默认密码 <b>12345678</b> 解锁。</p>
-        <p class="pb-hint" v-if="mode === 'change'">出于安全，首次使用需修改主密码。</p>
+    <!-- 解锁 / 设置主密码（视觉还原 v1.2.1） -->
+    <div v-if="mode === 'setup' || mode === 'unlock' || mode === 'change'" class="pb-unlock">
+      <div class="pb-unlock-card">
+        <div class="pb-unlock-badge">
+          <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="4" y="10" width="16" height="11" rx="2" />
+            <path d="M8 10V7a4 4 0 0 1 8 0v3" />
+          </svg>
+        </div>
+        <h1>加密记事本</h1>
+        <p class="pb-unlock-sub">{{ mode === 'setup' ? '首次使用，请设置你的主密码' : (mode === 'change' ? '出于安全，请修改你的主密码' : '输入主密码，解锁你的私人加密内容') }}</p>
 
-        <input v-if="mode !== 'change'" type="password" v-model="password" class="pb-input"
-               :placeholder="mode === 'setup' ? '设置主密码' : '输入主密码'" @keyup.enter="mode === 'setup' ? doSetup() : doUnlock()" />
-        <template v-else>
-          <input type="password" v-model="password" class="pb-input" placeholder="原主密码" />
-          <input type="password" v-model="newPassword" class="pb-input" placeholder="新主密码（至少 8 位）" />
-        </template>
+        <div class="pb-form">
+          <div class="pb-input-wrap" v-if="mode !== 'change'">
+            <input :type="showPwd ? 'text' : 'password'" v-model="password" class="pb-input"
+                   :placeholder="mode === 'setup' ? '设置主密码（至少 8 位）' : '主密码'"
+                   @keyup.enter="mode === 'setup' ? doSetup() : doUnlock()" />
+            <button class="pb-eye" type="button" :title="showPwd ? '隐藏' : '显示'" @click="showPwd = !showPwd">
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z" /><circle cx="12" cy="12" r="3" /></svg>
+            </button>
+          </div>
+          <template v-else>
+            <div class="pb-input-wrap">
+              <input :type="showPwd ? 'text' : 'password'" v-model="password" class="pb-input" placeholder="原主密码" @keyup.enter="doChange()" />
+              <button class="pb-eye" type="button" @click="showPwd = !showPwd">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z" /><circle cx="12" cy="12" r="3" /></svg>
+              </button>
+            </div>
+            <div class="pb-input-wrap">
+              <input :type="showPwd2 ? 'text' : 'password'" v-model="newPassword" class="pb-input" placeholder="新主密码（至少 8 位）" @keyup.enter="doChange()" />
+              <button class="pb-eye" type="button" @click="showPwd2 = !showPwd2">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z" /><circle cx="12" cy="12" r="3" /></svg>
+              </button>
+            </div>
+          </template>
 
-        <div class="pb-err" v-if="error">{{ error }}</div>
-        <button class="pb-btn pb-btn-primary" :disabled="busy" @click="mode === 'setup' ? doSetup() : (mode === 'change' ? doChange() : doUnlock())">
-          {{ busy ? '处理中…' : (mode === 'setup' ? '设置并进入' : (mode === 'change' ? '修改并进入' : '解锁')) }}
-        </button>
+          <div class="pb-meter" v-if="mode === 'setup' && password">
+            <div class="pb-meter-bar"><span :style="{ width: (strength * 25) + '%', background: strengthColor }"></span></div>
+            <div class="pb-meter-label" :style="{ color: strengthColor }">{{ strengthLabel }}</div>
+          </div>
+
+          <div class="pb-err" v-if="error">{{ error }}</div>
+
+          <div class="pb-actions">
+            <button class="pb-btn pb-btn-primary" :disabled="busy" @click="mode === 'setup' ? doSetup() : (mode === 'change' ? doChange() : doUnlock())">
+              {{ busy ? '处理中…' : (mode === 'setup' ? '设置并进入' : (mode === 'change' ? '修改并进入' : '解锁')) }}
+            </button>
+          </div>
+
+          <p class="pb-tip" v-if="mode === 'unlock' && !status.initialized">新账号请使用默认密码 <b>12345678</b> 解锁。</p>
+        </div>
       </div>
     </div>
 
@@ -104,7 +136,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from "vue";
+import { ref, reactive, computed, onMounted } from "vue";
 
 const BASE = "/apis/passwordbook.halo.run/v1alpha1/passwordbook";
 const axios: any = (window as any).axios;
@@ -115,6 +147,20 @@ const token = ref("");
 const password = ref("");
 const newPassword = ref("");
 const busy = ref(false);
+const showPwd = ref(false);
+const showPwd2 = ref(false);
+const strength = computed(() => {
+  const p = password.value;
+  if (!p) return 0;
+  let s = 0;
+  if (p.length >= 8) s++;
+  if (/[a-z]/.test(p) && /[A-Z]/.test(p)) s++;
+  if (/\d/.test(p)) s++;
+  if (/[^a-zA-Z0-9]/.test(p)) s++;
+  return Math.min(4, s);
+});
+const strengthColor = computed(() => ["#ef4444", "#ef4444", "#f0883e", "#d9a514", "#18a058"][strength.value]);
+const strengthLabel = computed(() => ["弱", "弱", "较弱", "中等", "强"][strength.value]);
 const error = ref("");
 
 const notes = ref<any[]>([]);
@@ -334,9 +380,44 @@ onMounted(init);
 
 <style>
 .pb-root { padding: 16px 20px; color: #1f2329; }
-.pb-auth { display: flex; justify-content: center; align-items: center; min-height: 60vh; }
-.pb-auth-card { width: 340px; background: #fff; border: 1px solid #e5e6eb; border-radius: 12px; padding: 24px; box-shadow: 0 2px 12px rgba(0,0,0,.06); }
-.pb-auth-card h2 { margin: 0 0 12px; font-size: 18px; }
+:root {
+  --pb-primary: #6d5efc;
+  --pb-primary-2: #6d5efc;
+  --pb-primary-deep: #5246e0;
+  --pb-primary-weak: #6d5efc1f;
+  --pb-bg: #f5f6fb;
+  --pb-card: #fff;
+  --pb-border: #e9ebf2;
+  --pb-text: #1c2230;
+  --pb-muted: #8b93a7;
+  --pb-danger: #ef4444;
+  --pb-danger-weak: #ef44441f;
+  --pb-success: #18a058;
+  --pb-radius: 14px;
+  --pb-shadow: 0 10px 30px #28265a14;
+}
+.pb-unlock { background: radial-gradient(900px 500px at 12% -8%, #6d5efc14 0%, #ece9ff00 60%), radial-gradient(800px 480px at 100% 0%, #6d5efc0f 0%, #e6f0ff00 55%), var(--pb-bg); justify-content: center; align-items: center; min-height: 62vh; padding: 3rem 1rem; display: flex; }
+.pb-unlock-card { background: var(--pb-card); border: 1px solid var(--pb-border); text-align: center; width: 100%; max-width: 380px; box-shadow: var(--pb-shadow); border-radius: 22px; padding: 2.4rem 1.8rem 2rem; }
+.pb-unlock-badge { color: #fff; background: linear-gradient(135deg, var(--pb-primary), var(--pb-primary-2)); border-radius: 20px; justify-content: center; align-items: center; width: 64px; height: 64px; margin: 0 auto 1.1rem; display: flex; box-shadow: 0 10px 24px #6d5efc61; }
+.pb-unlock-badge svg { width: 32px; height: 32px; }
+.pb-unlock-card h1 { margin: 0 0 .35rem; font-size: 1.4rem; font-weight: 700; color: var(--pb-text); }
+.pb-unlock-sub { color: var(--pb-muted); margin: 0 0 1.6rem; font-size: .86rem; }
+.pb-form { flex-direction: column; gap: .9rem; width: 100%; display: flex; }
+.pb-input-wrap { position: relative; }
+.pb-eye { color: var(--pb-muted); cursor: pointer; background: 0 0; border: none; border-radius: 8px; padding: 4px; display: inline-flex; position: absolute; top: 50%; right: 6px; transform: translateY(-50%); }
+.pb-eye svg { width: 18px; height: 18px; }
+.pb-eye:hover { color: var(--pb-primary); }
+.pb-actions { flex-wrap: wrap; align-items: center; gap: .5rem; display: flex; }
+.pb-actions .pb-btn-primary { background: linear-gradient(135deg, var(--pb-primary), var(--pb-primary-2)); color: #fff; border: none; box-shadow: 0 6px 16px #6d5efc4d; }
+.pb-actions .pb-btn-primary:hover { filter: brightness(1.05); }
+.pb-unlock .pb-input { padding: .7rem 2.7rem .7rem .95rem; border-radius: 11px; border: 1px solid var(--pb-border); }
+.pb-unlock .pb-input:focus { border-color: var(--pb-primary); box-shadow: 0 0 0 3px var(--pb-primary-weak); }
+.pb-meter { align-items: center; gap: .6rem; margin-top: .5rem; display: flex; }
+.pb-meter-bar { background: var(--pb-border); border-radius: 99px; flex: 1; height: 6px; overflow: hidden; }
+.pb-meter-bar span { border-radius: 99px; height: 100%; transition: width .25s, background .25s; display: block; }
+.pb-meter-label { min-width: 2em; font-size: .76rem; font-weight: 600; }
+.pb-tip { color: var(--pb-muted); margin: 1.1rem 0 0; font-size: .76rem; line-height: 1.6; }
+.pb-tip b { color: var(--pb-primary-deep); }
 .pb-hint { font-size: 13px; color: #86909c; margin: 0 0 12px; }
 .pb-input { width: 100%; box-sizing: border-box; padding: 9px 11px; margin-bottom: 10px; border: 1px solid #e5e6eb; border-radius: 8px; font-size: 14px; outline: none; }
 .pb-input:focus { border-color: #667eea; }
