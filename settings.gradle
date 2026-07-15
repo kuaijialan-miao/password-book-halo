@@ -1,1 +1,9 @@
+pluginManagement {
+    repositories {
+        maven { url "https://mirrors.tencent.com/nexus/repository/maven-public/" }
+        maven { url "https://repo.halo.run" }
+        gradlePluginPortal()
+        mavenCentral()
+    }
+}
 rootProject.name = 'password-book'

@@ -137,6 +137,7 @@ function authHeaders() {
   return token.value ? { "X-PasswordBook-Token": token.value } : {};
 }
 function req(path: string, config: any = {}) {
+  config.url = path;
   config.baseURL = BASE;
   config.headers = { ...(config.headers || {}), ...authHeaders() };
   return axios(config);

@@ -1,6 +1,6 @@
 plugins {
     id 'java'
-    id 'run.halo.tools.plugin' version '2.0.0'
+    id 'run.halo.plugin.devtools' version '0.8.0'
 }
 
 group = 'cn.miaohaha'
@@ -8,7 +8,9 @@ version = '1.4.1'
 description = '加密记事本：为当前登录用户提供服务端 AES-256-GCM 加密的笔记。'
 
 repositories {
+    maven { url "https://mirrors.tencent.com/nexus/repository/maven-public/" }
     mavenCentral()
+    gradlePluginPortal()
 }
 
 halo {
@@ -16,15 +18,10 @@ halo {
 }
 
 dependencies {
-    // Halo 核心 API（编译期提供，运行期由 Halo 提供）
-    compileOnly 'run.halo.app:halo:2.22.5'
-
-    // 响应式编程
-    implementation 'io.projectreactor:reactor-core:3.6.0'
-    implementation 'io.projectreactor.netty:reactor-netty:1.1.0'
-
-    // 加密所需 JDK 标准库即可，无额外依赖
-
+    // Halo 宿主已提供 Spring / Reactive / Halo 框架类，必须 compileOnly，
+    // 绝不能 implementation 打入插件 jar，否则 PluginClassLoader 与宿主 LaunchedClassLoader
+    // 会加载到两份不同的 reactor/spring 类，触发 LinkageError（认证接口必崩）。
+    compileOnly fileTree(dir: 'lib/halo-deps/extract/BOOT-INF/lib', include: '*.jar')
     testImplementation 'org.junit.jupiter:junit-jupiter:5.10.0'
 }
 

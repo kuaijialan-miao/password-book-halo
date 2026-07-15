@@ -15,3 +15,8 @@ Thumbs.db
 
 # 发布产物（作为 GitHub Release 资产，不入库）
 password-book-*.jar
+
+# 本地测试环境：从 Halo 发布包提取的依赖 jar 与运行时数据（不入库）
+/lib/
+/workplace/
+.gradle/
