@@ -1,0 +1,15 @@
+apiVersion: v1alpha1
+kind: Role
+metadata:
+  name: password-book-manage
+  labels:
+    halo.run/role-template: "true"
+  annotations:
+    rbac.authorization.halo.run/ui-permissions: |
+      ["plugin:password-book:view", "plugin:password-book:manage"]
+rules:
+  # 资源名必须与插件自定义接口的实际路径段一致：
+  # /apis/passwordbook.halo.run/v1alpha1/passwordbook/...  →  resource = "passwordbook"
+  - apiGroups: ["passwordbook.halo.run"]
+    resources: ["passwordbook"]
+    verbs: ["*"]

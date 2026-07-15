@@ -1,0 +1,18 @@
+apiVersion: v1alpha1
+kind: Role
+metadata:
+  name: password-book-view
+  labels:
+    halo.run/role-template: "true"
+  annotations:
+    rbac.authorization.halo.run/ui-permissions: |
+      ["plugin:password-book:view"]
+rules:
+  # 资源名必须与插件自定义接口的实际路径段一致：
+  # /apis/passwordbook.halo.run/v1alpha1/passwordbook/...  →  resource = "passwordbook"
+  # 说明：解锁 / 初始化 / 修改密码均为 POST，在 RBAC 动词模型中对应 create，
+  # 因此 view 角色需包含 create 才能解锁；其权限范围为「解锁 + 查看 + 新建」，
+  # 不含 update/delete，与 manage（*）形成分级。
+  - apiGroups: ["passwordbook.halo.run"]
+    resources: ["passwordbook"]
+    verbs: ["get", "list", "create"]
