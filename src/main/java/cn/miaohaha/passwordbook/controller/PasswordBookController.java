@@ -43,6 +43,7 @@ public class PasswordBookController {
     private static final String DEFAULT_PASSWORD = "12345678";
     private static final String GLOBAL_SALT_KEY = "master_salt";
     private static final String GLOBAL_VER_KEY = "verifier";
+    private static final Set<String> ALLOWED_CONTENT_TYPES = Set.of("text", "markdown", "html");
 
     private final CryptoService crypto;
     private final PasswordBookStore store;
@@ -106,6 +107,14 @@ public class PasswordBookController {
             return Mono.just((ResponseEntity) ResponseEntity.status(400).body(Map.of("error", "密码至少 8 位")));
         }
         return Mono.empty();
+    }
+
+    // contentType 白名单：仅允许 text/markdown/html，其余一律归为 text，避免前端渲染任意类型。
+    private static String normalizeContentType(String ct) {
+        if (ct == null || ct.isEmpty() || !ALLOWED_CONTENT_TYPES.contains(ct)) {
+            return "text";
+        }
+        return ct;
     }
 
     private SecretKey authedKey(String token, String user) {
@@ -190,29 +199,39 @@ public class PasswordBookController {
     }
 
     private Mono<ResponseEntity> verifyWith(String saltB64, String password, String verKey, String user) {
-        return this.crypto(() -> {
-            SecretKey key = this.crypto.deriveKey(password, Base64.getDecoder().decode(saltB64));
-            return key;
-        }).flatMap(key -> this.store.getMeta(verKey)
-            .flatMap(verB64 -> this.crypto(() -> {
-                String dec = this.crypto.decrypt((String) verB64, key);
-                if (!this.crypto.verifierPlaintext().equals(dec)) {
-                    throw new SecurityException("bad password");
-                }
-                return (ResponseEntity) ResponseEntity.ok(Map.of("token", this.session.create(key, user), "initialized", true));
-            }).onErrorResume(ex -> Mono.just((ResponseEntity) ResponseEntity.status(401)
-                .body(Map.of("error", "密码错误")))))
-            .switchIfEmpty(Mono.defer(() -> this.setupVerifier(key, verKey, user)))
-        ).onErrorResume(ex -> Mono.just((ResponseEntity) ResponseEntity.status(401)
-            .body(Map.of("error", "密码错误"))));
+        return this.crypto(() -> this.crypto.deriveKey(password, Base64.getDecoder().decode(saltB64)))
+            .flatMap(key -> this.store.getMeta(verKey)
+                .flatMap(verB64 -> this.crypto(() -> {
+                    String dec = this.crypto.decrypt((String) verB64, key);
+                    if (!this.crypto.verifierPlaintext().equals(dec)) {
+                        throw new SecurityException("bad password");
+                    }
+                    return key;
+                }).onErrorResume(ex -> Mono.error(new SecurityException("bad password"))))
+                // 校验值缺失时，不再盲接受任意密码；改为用"能否解密已有笔记"来证明密码正确，
+                // 通过后再补建校验值，避免解锁路径静默接受任意密码、重置账户。
+                .switchIfEmpty(Mono.defer(() -> this.proveKeyByNote(key, user)))
+            )
+            .flatMap(key -> this.store.getMeta("must_change:" + user)
+                .map(v -> (ResponseEntity) ResponseEntity.ok(Map.of(
+                    "token", this.session.create(key, user), "initialized", true, "mustChange", true)))
+                .switchIfEmpty(Mono.defer(() -> wrap((ResponseEntity) ResponseEntity.ok(Map.of(
+                    "token", this.session.create(key, user), "initialized", true, "mustChange", false))))))
+            .onErrorResume(ex -> Mono.just((ResponseEntity) ResponseEntity.status(401)
+                .body(Map.of("error", "密码错误"))));
     }
 
-    private Mono<ResponseEntity> setupVerifier(SecretKey key, String verKey, String user) {
-        return this.crypto(() -> {
-            String ver = this.crypto.encrypt(this.crypto.verifierPlaintext(), key);
-            this.store.setMeta(verKey, ver).block();
-            return (ResponseEntity) ResponseEntity.ok(Map.of("token", this.session.create(key, user), "initialized", true));
-        });
+    // 校验值缺失的降级校验：若能用派生密钥成功解密该用户任一笔记，则证明密码正确，
+    // 并交由调用方补建校验值；否则拒绝（无笔记可证明时返回错误，需管理员恢复）。
+    private Mono<SecretKey> proveKeyByNote(SecretKey key, String user) {
+        return this.store.listNotes()
+            .filter(n -> user.equals(n.getSpec().getOwner()))
+            .next()
+            .flatMap(n -> this.crypto(() -> {
+                this.crypto.decrypt(n.getSpec().getTitleData(), key);
+                return key;
+            }))
+            .switchIfEmpty(Mono.error(new SecurityException("verifier missing and no note to prove")));
     }
 
     /**
@@ -261,9 +280,13 @@ public class PasswordBookController {
                             return Mono.error(e);
                         }
                         return this.reEncryptOwnerless(gkey, newKey, (String) user)
-                            .then(this.store.setMeta(saltKey, newSaltB64))
-                            .then(this.store.setMeta(verKey, newVer))
-                            .then(this.store.setMeta(migratedKey, "true"))
+                            .flatMap(rb -> Flux.fromIterable(rb.notes)
+                                .flatMap(n -> this.store.updateNote(n), 4)
+                                .then(Mono.defer(() -> this.store.setMeta(saltKey, newSaltB64)
+                                    .then(this.store.setMeta(verKey, newVer))
+                                    .then(this.store.setMeta(migratedKey, "true"))))
+                                .onErrorResume(err -> this.rollback(rb).then(Mono.error(err)))
+                                .then())
                             .then(Mono.defer(() -> {
                                 this.session.revokeUser((String) user);
                                 return wrap((ResponseEntity) ResponseEntity.ok(Map.of(
@@ -344,6 +367,7 @@ public class PasswordBookController {
                 // 先在内存中完成全部解密/加密；任一失败抛出异常，不写入任何数据
                 ArrayList<String> oldTitles = new ArrayList<String>();
                 ArrayList<String> oldContents = new ArrayList<String>();
+                ArrayList<String> oldOwners = new ArrayList<String>();
                 ArrayList<String> newTitles = new ArrayList<String>();
                 ArrayList<String> newContents = new ArrayList<String>();
                 for (PasswordBookNote n : notes) {
@@ -351,6 +375,7 @@ public class PasswordBookController {
                     String c = this.crypto.decrypt(n.getSpec().getContentData(), oldKey);
                     oldTitles.add(n.getSpec().getTitleData());
                     oldContents.add(n.getSpec().getContentData());
+                    oldOwners.add(n.getSpec().getOwner());
                     newTitles.add(this.crypto.encrypt(t, newKey));
                     newContents.add(this.crypto.encrypt(c, newKey));
                 }
@@ -358,33 +383,39 @@ public class PasswordBookController {
                     notes.get(i).getSpec().setTitleData(newTitles.get(i));
                     notes.get(i).getSpec().setContentData(newContents.get(i));
                 }
-                return new Rollbackable(notes, oldTitles, oldContents);
+                return new Rollbackable(notes, oldTitles, oldContents, oldOwners);
             }))
+            // rb 保持在作用域内：先持久化重加密后的笔记，再提交盐+校验值；
+            // 任一步失败都把笔记回滚到旧密钥密文，保证 live 的 salt/verifier 始终与笔记一致，
+            // 避免"笔记已用新密钥、校验值仍是旧密钥"导致的账户锁死。
             .flatMap(rb -> Flux.fromIterable(rb.notes)
                 .flatMap(n -> this.store.updateNote(n), 4) // 受限并发，避免瞬时打满存储
+                .then(Mono.defer(() -> this.store.setMeta(saltKey, newSaltB64)
+                    .then(this.store.setMeta(verKey, newVer))))
                 .onErrorResume(err -> this.rollback(rb).then(Mono.error(err)))
-                .then())
-            .then(this.store.setMeta(saltKey, newSaltB64))
-            .then(this.store.setMeta(verKey, newVer));
+                .then());
     }
 
-    private Mono<Void> reEncryptOwnerless(SecretKey oldKey, SecretKey newKey, String user) {
+    private Mono<Rollbackable> reEncryptOwnerless(SecretKey oldKey, SecretKey newKey, String user) {
         return this.store.listNotes()
             .filter(n -> n.getSpec().getOwner() == null)
             .collectList()
             .flatMap(notes -> this.crypto(() -> {
+                ArrayList<String> oldTitles = new ArrayList<String>();
+                ArrayList<String> oldContents = new ArrayList<String>();
+                ArrayList<String> oldOwners = new ArrayList<String>();
                 for (PasswordBookNote n : notes) {
                     String t = this.crypto.decrypt(n.getSpec().getTitleData(), oldKey);
                     String c = this.crypto.decrypt(n.getSpec().getContentData(), oldKey);
+                    oldTitles.add(n.getSpec().getTitleData());
+                    oldContents.add(n.getSpec().getContentData());
+                    oldOwners.add(n.getSpec().getOwner()); // 遗留笔记 owner 应为 null
                     n.getSpec().setTitleData(this.crypto.encrypt(t, newKey));
                     n.getSpec().setContentData(this.crypto.encrypt(c, newKey));
                     n.getSpec().setOwner(user);
                 }
-                return notes;
-            }))
-            .flatMap(notes -> Flux.fromIterable(notes)
-                .flatMap(n -> this.store.updateNote(n), 4)
-                .then());
+                return new Rollbackable(notes, oldTitles, oldContents, oldOwners);
+            }));
     }
 
     private Mono<Void> rollback(Rollbackable rb) {
@@ -393,6 +424,9 @@ public class PasswordBookController {
                 int i = rb.notes.indexOf(n);
                 n.getSpec().setTitleData(rb.oldTitles.get(i));
                 n.getSpec().setContentData(rb.oldContents.get(i));
+                if (rb.oldOwners != null) {
+                    n.getSpec().setOwner(rb.oldOwners.get(i));
+                }
                 return this.store.updateNote(n);
             }).then();
     }
@@ -401,10 +435,13 @@ public class PasswordBookController {
         final List<PasswordBookNote> notes;
         final List<String> oldTitles;
         final List<String> oldContents;
-        Rollbackable(List<PasswordBookNote> notes, List<String> oldTitles, List<String> oldContents) {
+        final List<String> oldOwners;
+        Rollbackable(List<PasswordBookNote> notes, List<String> oldTitles,
+                     List<String> oldContents, List<String> oldOwners) {
             this.notes = notes;
             this.oldTitles = oldTitles;
             this.oldContents = oldContents;
+            this.oldOwners = oldOwners;
         }
     }
 
@@ -432,7 +469,9 @@ public class PasswordBookController {
         try {
             title = this.crypto.decrypt(n.getSpec().getTitleData(), key);
         } catch (Exception e) {
-            title = n.getSpec().getTitleData();
+            // 解密失败：返回占位文案，绝不回传原始密文（避免信息泄漏）
+            title = "（解密失败）";
+            item.put("decryptError", true);
         }
         item.put("title", title);
         item.put("preview", "内容隐藏，点击查看");
@@ -466,7 +505,8 @@ public class PasswordBookController {
                     body.put("createdAt", n.getSpec().getCreatedAt());
                     body.put("updatedAt", n.getSpec().getUpdatedAt());
                     return (ResponseEntity) ResponseEntity.ok(body);
-                });
+                }).onErrorResume(ex -> Mono.just((ResponseEntity) ResponseEntity.status(409)
+                    .body(Map.of("error", "笔记数据损坏或密钥不匹配"))));
             }).switchIfEmpty(Mono.defer(() -> wrap((ResponseEntity) ResponseEntity.status(404)
                 .body(Map.of("error", "未找到")))));
         });
@@ -486,7 +526,7 @@ public class PasswordBookController {
             if (title == null || title.isEmpty()) {
                 return this.badRequest("标题不能为空");
             }
-            String ct = contentType == null || contentType.isEmpty() ? "text" : contentType;
+            String ct = normalizeContentType(contentType);
             if ("anonymous".equals(user)) {
                 return this.forbidden();
             }
@@ -526,7 +566,7 @@ public class PasswordBookController {
             if (id == null || id.isEmpty() || title == null || title.isEmpty()) {
                 return this.badRequest("参数不完整");
             }
-            String ct = contentType == null || contentType.isEmpty() ? "text" : contentType;
+            String ct = normalizeContentType(contentType);
             if ("anonymous".equals(user)) {
                 return this.forbidden();
             }

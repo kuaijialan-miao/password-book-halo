@@ -110,7 +110,7 @@
         <div class="pb-note-meta">
           <span class="pb-tag" v-if="detail.category">{{ detail.category }}</span>
         </div>
-        <div class="pb-content" v-if="detail.contentType === 'html'" v-html="detail.content"></div>
+        <div class="pb-content" v-if="detail.contentType === 'html'" v-html="sanitizedHtml"></div>
         <pre class="pb-content" v-else>{{ detail.content }}</pre>
       </div>
     </div>
@@ -137,6 +137,7 @@
 
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted } from "vue";
+import DOMPurify from "dompurify";
 
 const BASE = "/apis/passwordbook.halo.run/v1alpha1/passwordbook";
 const axios: any = (window as any).axios;
@@ -168,6 +169,12 @@ const categories = ref<any[]>([]);
 const selectedCat = ref<string | null>(null);
 const loading = ref(false);
 const detail = ref<any>(null);
+
+// 仅对 html 类型内容做消毒后再 v-html，杜绝存储型 XSS（即使是用户自己的内容）。
+const sanitizedHtml = computed(() =>
+  detail.value && detail.value.contentType === "html"
+    ? DOMPurify.sanitize(detail.value.content || "")
+    : "");
 
 const showEditor = ref(false);
 const editing = reactive({ id: "", title: "", content: "", category: "", contentType: "text" });

@@ -49,6 +49,10 @@ public class CryptoService {
     }
 
     public String decrypt(String payload, SecretKey key) throws Exception {
+        // 校验密文格式：必须为 "base64Iv:base64Ciphertext"，避免数组越界导致 500
+        if (payload == null || payload.indexOf(':') < 0) {
+            throw new IllegalArgumentException("malformed ciphertext");
+        }
         String[] parts = payload.split(":", 2);
         byte[] iv = Base64.getDecoder().decode(parts[0]);
         byte[] ct = Base64.getDecoder().decode(parts[1]);

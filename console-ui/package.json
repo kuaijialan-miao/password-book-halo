@@ -7,6 +7,7 @@
     "build:copy": "vite build && node copy-to-resources.cjs"
   },
   "dependencies": {
+    "dompurify": "^3.4.12",
     "vue": "^3.4.0"
   },
   "devDependencies": {

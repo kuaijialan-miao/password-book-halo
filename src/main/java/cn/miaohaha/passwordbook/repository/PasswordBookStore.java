@@ -6,6 +6,7 @@ import cn.miaohaha.passwordbook.extension.PasswordBookNote;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
+import reactor.util.retry.Retry;
 import org.springframework.stereotype.Repository;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -48,6 +49,8 @@ public class PasswordBookStore {
     }
 
     public Mono<Void> setMeta(String key, String value) {
+        // 所有用户共用同一 Meta 文档，read-modify-write 非原子；通过有限重试消除并发丢失更新。
+        // 重试会重新 fetch 最新文档再 put，写入是幂等的，安全。
         return client.fetch(PasswordBookMeta.class, META_NAME).flatMap(meta -> {
             if (meta.getSpec() == null) {
                 meta.setSpec(new PasswordBookMeta.Spec());
@@ -66,7 +69,7 @@ public class PasswordBookStore {
             spec.getData().put(key, value);
             meta.setSpec(spec);
             return client.create(meta);
-        })).then();
+        })).retryWhen(Retry.max(3)).then();
     }
 
     public Mono<Void> deleteMeta(String key) {
